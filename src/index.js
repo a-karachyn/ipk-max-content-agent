@@ -2,7 +2,6 @@
 
 require('dotenv').config();
 
-const { bot } = require('./bot');
 const { startScheduler } = require('./scheduler');
 const { redis } = require('./redis');
 const { getMe } = require('./max');
@@ -18,32 +17,18 @@ async function main() {
     console.log(`[App] MAX Bot OK: @${me.username || me.name || me.user_id}`);
   } catch (err) {
     console.error('[App] MAX Bot API недоступен:', err.message);
-    console.error('[App] Публикация в MAX будет недоступна до исправления токена/сети.');
-    // Не падаем — Telegram-бот и генерация постов продолжат работать
+    // Не падаем — планировщик продолжит работу, публикация будет ошибочной
   }
 
-  // Запускаем планировщик
+  // Запускаем планировщик (генерация постов + уведомления через HTTP)
+  // Telegram polling НЕ запускается — его ведёт ipk-content-agent.
+  // Кнопки согласования обрабатывает ipk-content-agent.
   startScheduler();
 
-  // Запускаем Telegram бота (для уведомлений менеджеру)
-  bot.launch({
-    allowedUpdates: ['message', 'callback_query'],
-  });
+  console.log('[App] MAX Content Agent запущен (scheduler only, no Telegram polling)');
 
-  console.log('[App] Telegram бот запущен');
-  console.log('[App] MAX Content Agent готов к работе');
-
-  // Graceful shutdown
-  process.once('SIGINT', () => {
-    console.log('[App] SIGINT — завершение...');
-    bot.stop('SIGINT');
-    redis.quit();
-  });
-  process.once('SIGTERM', () => {
-    console.log('[App] SIGTERM — завершение...');
-    bot.stop('SIGTERM');
-    redis.quit();
-  });
+  process.once('SIGINT',  () => { console.log('[App] SIGINT');  redis.quit(); });
+  process.once('SIGTERM', () => { console.log('[App] SIGTERM'); redis.quit(); });
 }
 
 main().catch((err) => {

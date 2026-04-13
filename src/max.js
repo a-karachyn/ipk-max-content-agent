@@ -30,11 +30,13 @@ function channelId() {
  */
 async function maxRequest(method, path, body = null) {
   const url = new URL(path, BASE_URL);
-  url.searchParams.set('access_token', token());
 
   const opts = {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Authorization': `Bearer ${token()}`,
+      'Content-Type': 'application/json',
+    },
   };
   if (body) opts.body = JSON.stringify(body);
 
