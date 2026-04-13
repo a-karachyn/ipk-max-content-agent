@@ -7,8 +7,8 @@ const { redis } = require('./redis');
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = process.env.MODEL || 'claude-sonnet-4-6';
 
-const GROUPS_KEY = 'max_content:promo:groups';
-const PENDING_KEY = 'max_content:promo:pending_post';
+const GROUPS_KEY = 'max_promo:groups';
+const PENDING_KEY = 'max_promo:pending_post';
 
 // ─── Redis: база MAX сообществ ────────────────────────────────────────────────
 
@@ -70,35 +70,33 @@ function pickNextGroup(groups, excludeId = null) {
 
 // ─── Claude: поиск MAX сообществ ─────────────────────────────────────────────
 
-async function searchGroups() {
-  const prompt = `Найди актуальные сообщества, группы и чаты в мессенджере MAX (max.ru, бывший ICQ New) для профессиональной аудитории по темам:
+const SEARCH_QUERIES = [
+  'застройщики девелоперы СПб MAX мессенджер сообщество',
+  'строительные компании генподряд MAX группа чат',
+  'проектировщики архитекторы строительство MAX сообщество',
+  'технадзор технический заказчик строительство MAX группа',
+  'BIM информационное моделирование строительство MAX чат',
+  'управляющие компании ЖКХ эксплуатация зданий MAX сообщество',
+  'тендеры госзакупки строительство 44-ФЗ MAX группа',
+  'пожарная безопасность СКУД инженерные системы зданий MAX сообщество',
+  'умный дом автоматизация зданий строительство MAX чат',
+  'недвижимость инвестиции коммерческая недвижимость СПб MAX группа',
+];
 
-1. Пожарная безопасность — проектирование СПС, СОУЭ, систем пожаротушения, монтаж, нормативы МЧС
-2. СКУД, системы безопасности, интеграция охранных систем
-3. Строительство и проектирование в Санкт-Петербурге и СЗФО
-4. Экспертиза проектной документации — ГГЭ, негосударственная экспертиза, согласования
-5. Инженерные системы зданий и сооружений
-
-Если в MAX нет специализированных сообществ по этим темам, включи смежные:
-— профессиональные инженерные сообщества
-— строительные сообщества
-— сообщества по охране труда и промышленной безопасности
-
-Для каждого сообщества укажи название, ссылку (max.ru/...), тематику и краткое описание аудитории.
-
-Верни ТОЛЬКО JSON-массив без пояснений:
-[
-  {"name": "...", "link": "max.ru/...", "topic": "...", "description": "..."},
-  ...
-]`;
+async function searchGroupsByQuery(query) {
+  const prompt = `Найди 10 сообществ и групп в мессенджере MAX (max.ru) по теме: "${query}".
+Только сообщества где можно писать сообщения участникам.
+Верни JSON-массив из 10 элементов:
+[{"name":"...","link":"max.ru/...","topic":"...","description":"..."}]
+Только JSON, без пояснений.`;
 
   const messages = [{ role: 'user', content: prompt }];
 
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 6; i++) {
     const response = await client.messages.create(
       {
         model: MODEL,
-        max_tokens: 4096,
+        max_tokens: 2048,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         messages,
       },
@@ -112,20 +110,14 @@ async function searchGroups() {
         .join('\n')
         .trim();
 
-      const match = text.match(/\[[\s\S]*?\]/);
-      if (!match) throw new Error('Модель не вернула JSON-массив с сообществами');
+      const match = text.match(/\[[\s\S]*\]/);
+      if (!match) return [];
 
-      const found = JSON.parse(match[0]);
-      return found.map((g, idx) => ({
-        id: `mg_${Date.now()}_${idx}`,
-        name: g.name || 'Без названия',
-        link: (g.link || '').trim(),
-        topic: g.topic || '',
-        description: g.description || '',
-        status: 'active',
-        lastPublished: null,
-        publishNote: null,
-      }));
+      try {
+        return JSON.parse(match[0]);
+      } catch {
+        return [];
+      }
     }
 
     messages.push({ role: 'assistant', content: response.content });
@@ -143,34 +135,52 @@ async function searchGroups() {
     });
   }
 
-  throw new Error('Превышен лимит итераций при поиске сообществ');
+  return [];
+}
+
+async function searchGroups() {
+  const results = await Promise.all(
+    SEARCH_QUERIES.map((query) => searchGroupsByQuery(query).catch(() => [])),
+  );
+
+  const seenLinks = new Set();
+  const allGroups = [];
+
+  for (const found of results) {
+    for (const g of found) {
+      const link = (g.link || '').trim();
+      if (!link || seenLinks.has(link)) continue;
+      seenLinks.add(link);
+      allGroups.push({
+        id: `mg_${Date.now()}_${allGroups.length}`,
+        name: g.name || 'Без названия',
+        link,
+        topic: g.topic || '',
+        description: g.description || '',
+        status: 'active',
+        lastPublished: null,
+        publishNote: null,
+      });
+    }
+  }
+
+  if (!allGroups.length) throw new Error('Не найдено ни одного сообщества в MAX');
+  return allGroups;
 }
 
 // ─── Claude: генерация промо-поста для MAX ───────────────────────────────────
 
 async function generatePromoPost(group) {
-  const prompt = `Напиши пост для публикации в сообществе MAX от имени участника.
-
-Сообщество: ${group.name}
-Тематика: ${group.topic}
-${group.description ? `Аудитория: ${group.description}` : ''}
-
-Задача: полезный экспертный пост, который органично вписывается в это сообщество MAX.
-
-Структура:
-— 80% поста: конкретный полезный контент по теме "${group.topic}" (совет, нюанс нормативки, разбор типовой ситуации, факт из практики)
-— Последние 2–3 строки: ненавязчивое упоминание канала ИПК в MAX (max.ru/id351000349259_biz) и бота как источника материалов и для подачи заявок
-
-Требования:
-— Стиль: коллега делится опытом, без рекламного тона
-— Длина: 600–1000 символов
-— Без HTML-тегов, только чистый текст с эмодзи
-— Без хэштегов (выглядят как спам в чужих сообществах)
-— Не начинать с названия компании`;
+  const prompt = `Напиши экспертный пост (600–900 символов) для сообщества MAX "${group.name}" (тема: ${group.topic}).
+Аудитория: застройщики и заказчики строительства.
+Тема: почему экономия на проектировании пожарной безопасности срывает сдачу объекта.
+Раскрой одну боль: замечания ГПН/экспертизы, штрафы МЧС или риски при пожаре.
+В конце (2–3 строки) упомяни сообщество ИПК в MAX (max.ru/id351000349259_biz).
+Только чистый текст с эмодзи. Без HTML-тегов. Без хэштегов. Без рекламного тона. Не начинай с названия компании.`;
 
   const response = await client.messages.create({
     model: MODEL,
-    max_tokens: 2048,
+    max_tokens: 1024,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: prompt }],
   });
