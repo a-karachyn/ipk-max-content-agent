@@ -4,15 +4,14 @@
  * MAX Bot API client
  *
  * Документация: https://dev.max.ru/docs
- * Base URL: https://botapi.max.ru
- * Auth: access_token как query-параметр (?access_token=TOKEN)
- *   — Bearer-заголовок API не принимает, возвращает "No access token"
+ * Base URL: https://platform-api.max.ru  (не botapi.max.ru)
+ * Auth: Authorization: <token>  — просто токен без Bearer/Bot/bearer
  *
  * Используется только для публикации в MAX канал.
  * Согласование с менеджером происходит через Telegram.
  */
 
-const BASE_URL = 'https://botapi.max.ru';
+const BASE_URL = 'https://platform-api.max.ru';
 
 function token() {
   const t = process.env.MAX_BOT_TOKEN;
@@ -31,11 +30,12 @@ function channelId() {
  */
 async function maxRequest(method, path, body = null) {
   const url = new URL(path, BASE_URL);
-  url.searchParams.set('access_token', token());
-
   const opts = {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Authorization': token(),
+      'Content-Type': 'application/json',
+    },
   };
   if (body) opts.body = JSON.stringify(body);
 
