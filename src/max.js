@@ -5,7 +5,8 @@
  *
  * Документация: https://dev.max.ru/docs
  * Base URL: https://botapi.max.ru
- * Auth: access_token в query-параметре
+ * Auth: access_token как query-параметр (?access_token=TOKEN)
+ *   — Bearer-заголовок API не принимает, возвращает "No access token"
  *
  * Используется только для публикации в MAX канал.
  * Согласование с менеджером происходит через Telegram.
@@ -30,13 +31,11 @@ function channelId() {
  */
 async function maxRequest(method, path, body = null) {
   const url = new URL(path, BASE_URL);
+  url.searchParams.set('access_token', token());
 
   const opts = {
     method,
-    headers: {
-      'Authorization': `Bearer ${token()}`,
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Content-Type': 'application/json' },
   };
   if (body) opts.body = JSON.stringify(body);
 
