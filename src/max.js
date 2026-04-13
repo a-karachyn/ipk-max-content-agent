@@ -56,10 +56,7 @@ async function maxRequest(method, path, body = null) {
  */
 async function publishToChannel(text) {
   const chatId = channelId();
-  return maxRequest('POST', '/messages', {
-    chat_id: chatId,
-    text,
-  });
+  return maxRequest('POST', `/messages?chat_id=${encodeURIComponent(chatId)}`, { text });
 }
 
 /**
